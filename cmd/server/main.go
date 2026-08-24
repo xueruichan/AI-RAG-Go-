@@ -10,11 +10,13 @@ import (
 	"gorag/internal/model"
 	"log"
 
+	"context"
 	"gorag/internal/handler"
 	"gorag/internal/middleware"
 	"gorag/internal/repository"
 	"gorag/internal/service"
 	"gorag/internal/worker"
+	"gorag/pkg/embedding"
 	"os"
 	"time"
 )
@@ -52,7 +54,31 @@ func main() {
 		log.Fatal("failed to create uploads directory:", err)
 	}
 
-	// 创建 Repository：负责数据库操作
+	// Module 8：从环境变量读取 DashScope API Key。
+	// API Key 绝对不要写死进源码
+	apiKey := os.Getenv("DASHSCOPE_API_KEY")
+	if apiKey == "" {
+		log.Fatal("DASHSCOPE_API_KEY is not set")
+	}
+
+	//创建 Embedding Client用于文本转化为向量
+	embeddingClient := embedding.NewDashScopeClient(apiKey)
+
+	//Module 8：连接 Milvus,初始化设置最大 15 秒时间
+	milvusCtx, milvusCancel := context.WithTimeout(
+		context.Background(),
+		15*time.Second,
+	)
+
+	milvusClient, err := config.InitMilvus(milvusCtx)
+
+	milvusCancel()
+
+	if err != nil {
+		log.Fatal("failed to connect milvus:", err)
+	}
+
+	// 创建 Repository：负责数据库操作或者底层的API调用
 	/*
 			MySQL/GORM 的 db
 		       ↓
@@ -61,6 +87,22 @@ func main() {
 	documentRepository := repository.NewDocumentRepository(db)
 	documentChunkRepository := repository.NewDocumentChunkRepository(db)
 	documentCacheRepository := repository.NewDocumentCacheRepository(redisClient)
+	vectorRepository := repository.NewVectorRepository(milvusClient, embedding.DefaultDimension)
+
+	//初始化 Milvus 集合（Collection）
+	//确保应用启动后，Milvus 中用于存储向量数据的集合已经存在，并且已经加载到内存，可以正常执行搜索
+	collectionCtx, collectionCancel := context.WithTimeout(
+		context.Background(),
+		60*time.Second,
+	)
+	err = vectorRepository.EnsureCollection(collectionCtx)
+	collectionCancel()
+
+	if err != nil {
+		log.Fatal("failed to prepare milvus collection:", err)
+	}
+
+	log.Printf("milvus collection %s is ready", repository.MilvusCollectionName)
 
 	// 创建 Service：负责业务逻辑
 	/*
@@ -68,7 +110,10 @@ func main() {
 		    ↓
 			交给Service
 	*/
-	documentService := service.NewDocumentService(documentRepository, documentChunkRepository, documentCacheRepository)
+	documentService := service.NewDocumentService(documentRepository, documentChunkRepository, documentCacheRepository, embeddingClient, vectorRepository)
+
+	//module8新增RAG查询service层
+	searchService := service.NewSearchService(embeddingClient, vectorRepository, documentChunkRepository)
 
 	//创建 Document Worker Pool
 	//4：同时最多由 4 个 Worker 消费任务
@@ -86,6 +131,9 @@ func main() {
 			交给 Handler
 	*/
 	documentHandler := handler.NewDocumentHandler(documentService, documentWorkerPool)
+
+	//module8新增：搜索handler层
+	searchHandler := handler.NewSearchHandler(searchService)
 
 	//返回了一个结构体指针*gin.Engine，指向路由表
 	r := gin.Default()
@@ -130,17 +178,6 @@ func main() {
 		})
 	})
 
-	//Query:
-	//通过URL的问号解析后面的键值对：q=golang，如果有多对用&链接
-	// curl "http://localhost:8080/search?q=golang"-----{"keyword":"golang"}
-	r.GET("/search", func(c *gin.Context) {
-		keyword := c.Query("q")
-
-		c.JSON(http.StatusOK, gin.H{
-			"keyword": keyword,
-		})
-	})
-
 	r.POST("/echo", func(c *gin.Context) {
 		var req EchoRequest
 
@@ -156,12 +193,15 @@ func main() {
 		})
 	})
 
+	//注册路由：
 	//r.GET() 和 r.POST() 就是两个注册函数,唯一的区别是它们把处理函数挂在了路由表的不同“方法标签”下面。
 	//这里的documentHandler.Create并没有调用，调用要加括号，只是把这个函数传递给了某个变量来接收，Gin内部会自己调用函数
 	r.POST("/documents", documentHandler.Create)
 	r.GET("/documents", documentHandler.List)
 	r.GET("/documents/:id", documentHandler.GetByID)
 	r.DELETE("/documents/:id", documentHandler.Delete)
+	//module8:向量语义检索
+	r.POST("/search", searchHandler.Search)
 
 	//监听端口
 	if err := r.Run(":8080"); err != nil {

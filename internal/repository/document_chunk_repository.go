@@ -34,3 +34,29 @@ func (r *DocumentChunkRepository) DeleteByDocumentID(documentID uint) error {
 	//{}:创建一个该结构体的实例，并且所有字段都使用零值初始化
 	return r.db.Where("document_id=?", documentID).Delete(&model.DocumentChunk{}).Error
 }
+
+
+//搜索 Milvus 后只会得到chunk_id而正文在MySQL中还要进行查询
+//FindByIDs 根据一组 Chunk ID 批量查询正文
+// Milvus 返回：
+// [31, 82, 17]
+//
+// 然后一次 SQL 查询：
+// WHERE id IN (31, 82, 17)
+
+//输入:[]uint 类型的切片，包含多个 chunk ID  输出：一个 []model.DocumentChunk 切片，包含这些 ID 对应的完整 chunk 记录
+func (r *DocumentChunkRepository) FindByIDs(ids []uint) ([]model.DocumentChunk,error){
+	//如果传入的 ID 切片为空，没必要查询数据库，直接返回一个空切片和 nil 错误
+	if len(ids)==0{
+		return []model.DocumentChunk{},nil
+	}
+
+	//用于接收查询结果
+	var chunks []model.DocumentChunk
+
+	if err:=r.db.Where("id IN ?",ids).Find(&chunks).Error; err!=nil{
+		return nil,err
+	}
+
+	return chunks,nil
+}

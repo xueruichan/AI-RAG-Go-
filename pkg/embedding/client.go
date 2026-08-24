@@ -14,7 +14,14 @@ import (
 
 // const 常量名 = 值或const 常量名 数据类型= 值,但是不能用短声明或者var
 // 阿里云百炼的API
-const dashScopeEmbeddingURL = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
+const(
+	dashScopeEmbeddingURL = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
+	constDefaultDimension=1024
+)
+//分离内部使用的常量和对外暴露的接口
+const DefaultDimension=constDefaultDimension
+
+
 
 // EmbeddingClient 定义 Embedding 能力
 //接口里写的是“方法签名”，不是定义或调用:只要拥有这个方法就能实现接口
@@ -25,7 +32,7 @@ type 接口名 interface {
 }
 */
 type EmbeddingClient interface {
-	EMbed(ctx context.Context, text string) ([]float32, error)
+	Embed(ctx context.Context, text string) ([]float32, error)
 }
 
 // OpenAIClient 是EmbeddingClient 的一种具体实现
@@ -51,6 +58,9 @@ type embeddingRequest struct {
 	Input          string `json:"input"`
 	Model          string `json:"model"`
 	EncodingFormat string `json:"encoding_format"`
+	// 强制要求返回 1024 维，
+	// 避免模型配置变化以后和 Milvus Schema 不一致
+	Dimension      int    `json:"dimensions"`
 }
 
 // embeddingResponse：表示 API 返回的 JSON 结构
@@ -64,7 +74,7 @@ type embeddingResponse struct {
 }
 
 // Embed 把一段文本转换为向量
-func (c *DashScopeClient) EMbed(
+func (c *DashScopeClient) Embed(
 	ctx context.Context,
 	text string,
 ) ([]float32, error) {
@@ -78,6 +88,7 @@ func (c *DashScopeClient) EMbed(
 		Input:          text,
 		Model:          c.model,
 		EncodingFormat: "float",
+		Dimension: DefaultDimension,
 	}
 
 	//2. Go struct -> JSON
@@ -103,7 +114,7 @@ func (c *DashScopeClient) EMbed(
 	// 4. 添加 HTTP Header
 	req.Header.Set(
 		"Authorization",
-		"Bearer"+c.apiKey,
+		"Bearer "+c.apiKey,
 	)
 
 	req.Header.Set(
@@ -135,7 +146,7 @@ func (c *DashScopeClient) EMbed(
 
 	//6.检查HTTP状态码
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		errorBody, _ := io.ReadAll(req.Body)
+		errorBody, _ := io.ReadAll(resp.Body)
 
 		return nil, fmt.Errorf("embedding api returned status %d: %s", resp.StatusCode, string(errorBody))
 	}
@@ -152,11 +163,16 @@ func (c *DashScopeClient) EMbed(
 			"embedding api returned empty data",
 		)
 	}
-
-	if len(result.Data[0].Embedding) == 0 {
-		return nil, fmt.Errorf(
-			"embedding api returned empty vector",
-		)
+	
+	vector:=result.Data[0].Embedding
+	if len(vector)==0{
+		return nil,fmt.Errorf("embedding api returned empty vector")
 	}
-	return result.Data[0].Embedding, nil
+
+	//9.维度错误（不是1024）
+	if len(vector)!=DefaultDimension{
+		return nil,fmt.Errorf("embedding dimension mismatch: expected=%d actual=%d",DefaultDimension,len(vector))
+	}
+
+	return vector,nil
 }

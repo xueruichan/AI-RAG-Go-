@@ -30,7 +30,7 @@ func main() {
 	defer cancel()
 
 	//4.调用embedding
-	vector, err := client.EMbed(
+	vector, err := client.Embed(
 		ctx,
 		"Hello World",
 	)

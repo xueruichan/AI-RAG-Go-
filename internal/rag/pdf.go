@@ -2,39 +2,94 @@ package rag
 
 import (
 	"fmt"
-	"io"
-
-	"github.com/ledongthuc/pdf"
+	"os/exec"
+	"strings"
 )
 
 /*
-ExtractText 从指定 PDF 文件中提取纯文本
+ExtractText:
+
+使用系统 pdftotext 提取 PDF 文本。
+
+原因：
+
+很多 PDF（尤其 Word 导出的 PDF）
+内部字体编码复杂。
+
+Go 部分 PDF 库解析可能得到：
+
+\u0000
+乱码
+错误字符
+
+而 poppler 的 pdftotext
+对这类 PDF 兼容性更好。
 */
-
 func ExtractText(filepath string) (string, error) {
-	//1.pdf.Open:打开pdf，并返回：f-> 底层文件对象， reader->PDF解析对象
-	f, reader, err := pdf.Open(filepath)
-	if err != nil {
-		return "", fmt.Errorf("open pdf failed:%w", err)
-	}
-	//defer:把该调用推迟到当前函数返回之前执行，用于关闭或解锁
-	defer f.Close()
 
-	//2.通过PDF解析器reader获取纯文本textReader
 	/*
-		GetPlainText() 返回 io.Reader
-		PDF->PDF解析器->一条提供文本数据的数据流
+		执行：
+
+		pdftotext xxx.pdf -
+
+		最后的 "-" 表示：
+
+		输出到标准输出 stdout
+
+		例如：
+
+		PDF
+		 |
+		 pdftotext
+		 |
+		output byte
 	*/
-	textReader, err := reader.GetPlainText()
+	cmd := exec.Command(
+		"pdftotext",
+		filepath,
+		"-",
+	)
+
+	output, err := cmd.Output()
+
 	if err != nil {
-		return "", fmt.Errorf("extract pdf text failed:%w", err)
+
+		return "",
+			fmt.Errorf(
+				"extract pdf text failed: %w",
+				err,
+			)
 	}
 
-	//3.把文本数据流读到内存
-	data, err := io.ReadAll(textReader)
-	if err != nil {
-		return "", fmt.Errorf("read pdf text failed:%w", err)
-	}
-	return string(data), nil
+	// byte 转 string
+	text := string(output)
 
+	/*
+		文本有效性检查：
+
+		避免：
+
+		空PDF
+		扫描PDF
+		无文字PDF
+
+		进入：
+
+		Chunk
+		 |
+		Embedding
+		 |
+		Milvus
+
+		产生无意义向量。
+	*/
+	if len(strings.TrimSpace(text)) == 0 {
+
+		return "",
+			fmt.Errorf(
+				"pdf contains no text",
+			)
+	}
+
+	return text, nil
 }

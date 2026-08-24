@@ -4,7 +4,6 @@ go 1.26.5
 
 require (
 	github.com/gin-gonic/gin v1.12.0
-	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/milvus-io/milvus/client/v2 v2.6.5
 	github.com/redis/go-redis/v9 v9.22.0
 	gorm.io/driver/mysql v1.6.0

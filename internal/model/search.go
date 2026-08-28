@@ -1,4 +1,4 @@
-//定义业务中需要使用的数据结构
+// 定义业务中需要使用的数据结构
 package model
 
 //SearchRequest：接收搜索请求
@@ -9,15 +9,19 @@ package model
     "top_k": 5
 }
 */
-type SearchRequest struct{
+type SearchRequest struct {
 	Query string `json:"query" binding:"required"`
 	TopK  int    `json:"top_k,omitempty"`
 }
 
-//SearchResult：返回搜索结果
+// SearchResult：返回搜索结果
 // 业务层最终返回给客户端 的结果
-type SearchResult struct{
-	ChunkID uint   `json:"chunk_id"`
-	Score float32  `json:"score"`
-	Content string `json:"content"`
+type SearchResult struct {
+	ChunkID uint    `json:"chunk_id"`
+	Score   float32 `json:"score"`
+	Content string  `json:"content"`
+	//为了支持module9中的 RAG 问答，需要补充字段:
+	DocumentID uint   `json:"document_id"`
+	FileName   string `json:"filename"`
+	ChunkIndex int    `json:"chunk_index"`
 }

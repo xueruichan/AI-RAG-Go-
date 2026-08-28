@@ -17,6 +17,7 @@ import (
 	"gorag/internal/service"
 	"gorag/internal/worker"
 	"gorag/pkg/embedding"
+	"gorag/pkg/llm"
 	"os"
 	"time"
 )
@@ -63,6 +64,19 @@ func main() {
 
 	//创建 Embedding Client用于文本转化为向量
 	embeddingClient := embedding.NewDashScopeClient(apiKey)
+
+	//module 9:初始化DeepSeek
+	// DASHSCOPE_API_KEY
+	// 用于Embedding
+	// DEEPSEEK_API_KEY
+	// 用于LLM答案生成
+	deepSeekAPIKey := os.Getenv("DEEPSEEK_API_KEY")
+
+	if deepSeekAPIKey == "" {
+		log.Fatal("DEEPSEEK_API_KEY is not set")
+	}
+
+	llmClient := llm.NewDeepSeekClient(deepSeekAPIKey)
 
 	//Module 8：连接 Milvus,初始化设置最大 15 秒时间
 	milvusCtx, milvusCancel := context.WithTimeout(
@@ -113,7 +127,13 @@ func main() {
 	documentService := service.NewDocumentService(documentRepository, documentChunkRepository, documentCacheRepository, embeddingClient, vectorRepository)
 
 	//module8新增RAG查询service层
-	searchService := service.NewSearchService(embeddingClient, vectorRepository, documentChunkRepository)
+	searchService := service.NewSearchService(embeddingClient, vectorRepository, documentChunkRepository, documentRepository)
+
+	//module 9:：创建 RAGService， SearchService = Retrieval， llmClient = Generation。两者组合才是真正的RAG
+	ragService := service.NewRAGService(
+		searchService,
+		llmClient,
+	)
 
 	//创建 Document Worker Pool
 	//4：同时最多由 4 个 Worker 消费任务
@@ -134,6 +154,9 @@ func main() {
 
 	//module8新增：搜索handler层
 	searchHandler := handler.NewSearchHandler(searchService)
+
+	//module9新增：创建 RAG Handler
+	ragHandler := handler.NewRAGHandler(ragService)
 
 	//返回了一个结构体指针*gin.Engine，指向路由表
 	r := gin.Default()
@@ -202,6 +225,8 @@ func main() {
 	r.DELETE("/documents/:id", documentHandler.Delete)
 	//module8:向量语义检索
 	r.POST("/search", searchHandler.Search)
+	//module9:Retrieval + Generation,最终返回answer,sources
+	r.POST("/ask", ragHandler.Ask)
 
 	//监听端口
 	if err := r.Run(":8080"); err != nil {

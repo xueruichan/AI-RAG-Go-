@@ -70,6 +70,25 @@ func (r *DocumentRepository) FindByID(id uint) (*model.Document, error) {
 	return &document, nil
 }
 
+// 为了module9实现RAG，新增批量查询的方法
+// 拿到一批 chunk 后，需要根据每个 chunk 的 DocumentID 去查询 documents 表，获取文件名等信息。
+// 如果对每个 DocumentID 都执行一次 SQL 查询，效率很低
+func (r *DocumentRepository) FindByIDs(ids []uint) ([]model.Document, error) {
+	// 空列表没有必要访问MySQL
+	if len(ids) == 0 {
+		return []model.Document{}, nil
+	}
+
+	//接收查询结果
+	var documents []model.Document
+
+	if err := r.db.Where("id IN ?", ids).Find(&documents).Error; err != nil {
+		return nil, err
+	}
+
+	return documents, nil
+}
+
 func (r *DocumentRepository) DeleteByID(id uint) (bool, error) {
 	//数据库按照id进行删除
 	result := r.db.Delete(&model.Document{}, id)

@@ -4,6 +4,7 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -33,6 +34,15 @@ type Client interface {
 		systemPrompt string,
 		userPrompt string,
 	) (string, error)
+}
+
+type StreamingClient interface {
+	StreamChat(
+		ctx context.Context,
+		systemPrompt string,
+		userPrompt string,
+		onDelta func(string) error,
+	) error
 }
 
 // DeepSeekClient 是 Client 接口的一种具体实现
@@ -94,6 +104,14 @@ type chatResponse struct {
 		Message struct {
 			Content string `json:"content"`
 		} `json:"message"`
+	} `json:"choices"`
+}
+
+type chatStreamChunk struct {
+	Choices []struct {
+		Delta struct {
+			Content string `json:"content"`
+		} `json:"delta"`
 	} `json:"choices"`
 }
 
@@ -216,4 +234,184 @@ func (c *DeepSeekClient) Chat(
 	}
 
 	return answer, nil
+}
+
+// StreamChat 调用 DeepSeek 的流式 API。
+//
+// 它不返回完整答案，而是每收到一段新文本，
+// 就调用 onDelta 将文本交给上层。
+func (c *DeepSeekClient) StreamChat(
+	ctx context.Context,
+	systemPrompt string,
+	userPrompt string,
+	onDelta func(string) error,
+) error {
+
+	// 1. 检查 API Key，避免发出无效请求。
+	if strings.TrimSpace(c.apiKey) == "" {
+		return fmt.Errorf("deepseek api key is empty")
+	}
+
+	// 2. 检查用户提示词。
+	if strings.TrimSpace(userPrompt) == "" {
+		return fmt.Errorf("user prompt cannot be empty")
+	}
+
+	// 3. 检查回调函数。
+	// 如果没有回调函数，就没有地方接收生成的文本。
+	if onDelta == nil {
+		return fmt.Errorf("onDelta callback is nil")
+	}
+
+	// 4. 构造请求。
+	// 这里复用原有 chatRequest 结构体。
+	requestBody := chatRequest{
+		Model: c.model,
+		Messages: []chatMessage{
+			{
+				Role:    "system",
+				Content: systemPrompt,
+			},
+			{
+				Role:    "user",
+				Content: userPrompt,
+			},
+		},
+		Thinking: thinkingConfig{
+			Type: "disabled",
+		},
+		Temperature: 0.2,
+		MaxTokens:   1024,
+
+		// 关键区别：
+		// true 表示要求 DeepSeek 流式返回生成结果。
+		Stream: true,
+	}
+
+	// 5. 将 Go 结构体序列化成 JSON。
+	body, err := json.Marshal(requestBody)
+	if err != nil {
+		return fmt.Errorf(
+			"marshal streaming request failed: %w", err,
+		)
+	}
+
+	// 6. 创建带上下文的 HTTP POST 请求。
+	// ctx 取消时，请求也可以随之终止。
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		deepSeekChatURL,
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"create streaming request failed: %w", err,
+		)
+	}
+
+	// 7. 设置认证和数据格式。
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
+	// 8. 发送请求。
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf(
+			"send streaming request failed: %w", err,
+		)
+	}
+	defer resp.Body.Close()
+
+	// 9. 检查 HTTP 状态码。
+	// 如果 API 返回 401、429、500 等错误，
+	// 读取有限长度的错误内容，方便定位问题。
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		errorBody, _ := io.ReadAll(
+			io.LimitReader(resp.Body, 8*1024),
+		)
+		return fmt.Errorf(
+			"deepseek stream returned status %d: %s",
+			resp.StatusCode,
+			strings.TrimSpace(string(errorBody)),
+		)
+	}
+
+	// 10. Scanner 按行读取 SSE 响应。
+	// 设置较大的缓冲区，避免较长的数据行触发默认长度限制。
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+
+	// DeepSeek 正常结束时会发送 data: [DONE]。
+	receivedDone := false
+
+	for scanner.Scan() {
+		// 获取当前行，例如：
+		// data: {"choices":[{"delta":{"content":"你好"}}]}
+		line := strings.TrimSpace(scanner.Text())
+
+		// 忽略空行、event 行及其他非 data 行。
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+
+		// 去掉 SSE 协议中的 data: 前缀。
+		data := strings.TrimSpace(
+			strings.TrimPrefix(line, "data:"),
+		)
+
+		if data == "" {
+			continue
+		}
+
+		// [DONE] 是结束标记，不是 JSON。
+		if data == "[DONE]" {
+			receivedDone = true
+			break
+		}
+
+		// 11. 将当前 JSON 数据片段解析成结构体。
+		var chunk chatStreamChunk
+
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			return fmt.Errorf(
+				"decode streaming chunk failed: %w", err,
+			)
+		}
+
+		// 12. 取出每个 choice 新生成的文本。
+		for _, choice := range chunk.Choices {
+			content := choice.Delta.Content
+
+			// 有些数据块只包含结束信息，没有文本。
+			if content == "" {
+				continue
+			}
+
+			// 13. 将文本立即交给上层。
+			// 如果上层返回错误，就停止读取。
+			if err := onDelta(content); err != nil {
+				return fmt.Errorf(
+					"handle streaming delta failed: %w", err,
+				)
+			}
+		}
+	}
+
+	// 14. 检查网络读取错误。
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf(
+			"read streaming response failed: %w", err,
+		)
+	}
+
+	// 15. 没有收到正常结束标记，说明流可能被截断。
+	if !receivedDone {
+		return fmt.Errorf(
+			"deepseek stream ended before [DONE]",
+		)
+	}
+
+	return nil
 }

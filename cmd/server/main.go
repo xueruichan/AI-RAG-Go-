@@ -227,6 +227,9 @@ func main() {
 	r.POST("/search", searchHandler.Search)
 	//module9:Retrieval + Generation,最终返回answer,sources
 	r.POST("/ask", ragHandler.Ask)
+	// Module 10：SSE 流式 RAG 问答
+	// 普通 /ask 保持不变；流式问答使用独立路由。
+	r.POST("/ask/stream", ragHandler.AskStream)
 
 	//监听端口
 	if err := r.Run(":8080"); err != nil {

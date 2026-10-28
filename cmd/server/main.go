@@ -231,6 +231,11 @@ func main() {
 	// 普通 /ask 保持不变；流式问答使用独立路由。
 	r.POST("/ask/stream", ragHandler.AskStream)
 
+	// 提供前端静态文件。
+	// 浏览器访问 /web/ 时，Gin 会读取 web/index.html。
+	// CSS 和 JavaScript 也通过同一个 Gin 服务提供。
+	r.Static("/web", "./web")
+
 	//监听端口
 	if err := r.Run(":8080"); err != nil {
 		log.Fatal(err)

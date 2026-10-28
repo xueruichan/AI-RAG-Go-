@@ -1,0 +1,208 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GoRAG · 知识库工作台</title>
+    <link rel="stylesheet" href="/web/style.css">
+    <script src="/web/app.js" defer></script>
+</head>
+<body>
+<div class="app-shell">
+
+    <!-- 左侧边栏：品牌、PDF 上传、文档列表 -->
+    <aside class="sidebar">
+        <div class="brand">
+            <div class="brand-logo">G</div>
+            <div>
+                <div class="brand-name">GoRAG</div>
+                <div class="brand-caption">KNOWLEDGE WORKSPACE</div>
+            </div>
+        </div>
+
+        <div class="section-label">KNOWLEDGE BASE</div>
+
+        <section class="upload-card">
+            <div class="upload-icon">↑</div>
+            <h2>导入知识文档</h2>
+            <p>上传 PDF，让 AI 从你的资料中寻找答案。</p>
+
+            <input id="fileInput" type="file" accept=".pdf,application/pdf" hidden>
+
+            <button id="chooseFileBtn" class="button button-secondary full-width">
+                选择 PDF 文件
+            </button>
+
+            <div id="selectedFileName" class="selected-file">
+                尚未选择文件
+            </div>
+
+            <button id="uploadBtn" class="button button-primary full-width" disabled>
+                上传并建立索引
+            </button>
+
+            <div id="uploadStatus" class="upload-status" aria-live="polite">
+                支持 PDF，单个文件最大 10 MB
+            </div>
+        </section>
+
+        <section class="documents-section">
+            <div class="section-heading">
+                <div>
+                    <h2>我的文档</h2>
+                    <p>已上传的知识资料</p>
+                </div>
+                <button id="refreshDocsBtn" class="icon-button" title="刷新文档列表">
+                    ↻
+                </button>
+            </div>
+
+            <div id="documentsList" class="documents-list">
+                <div class="empty-state">正在加载文档...</div>
+            </div>
+        </section>
+
+        <div class="sidebar-footer">
+            <span class="status-dot"></span>
+            <span>GoRAG 本地知识库</span>
+            <span class="version-label">MVP</span>
+        </div>
+    </aside>
+
+    <!-- 右侧主区域 -->
+    <main class="main-content">
+        <header class="topbar">
+            <div>
+                <div class="eyebrow">YOUR PRIVATE KNOWLEDGE BASE</div>
+                <h1>知识库助手</h1>
+                <p class="page-description">
+                    上传资料、检索知识，并通过 AI 获得有来源依据的回答。
+                </p>
+            </div>
+
+            <div id="apiStatus" class="api-status">
+                <span class="status-dot"></span>
+                <span id="apiStatusText">正在连接服务...</span>
+            </div>
+        </header>
+
+        <!-- 两个功能标签 -->
+        <nav class="tabs">
+            <button class="tab-button active" data-view="chatView">
+                <span>✳</span> 智能问答
+            </button>
+            <button class="tab-button" data-view="searchView">
+                <span>⌕</span> 语义检索
+            </button>
+        </nav>
+
+        <!-- 功能一：SSE 流式问答 -->
+        <section id="chatView" class="workspace-view chat-view">
+            <div class="panel-heading">
+                <div>
+                    <h2>与知识库对话</h2>
+                    <p>回答会逐步生成，并显示参考资料。</p>
+                </div>
+                <div class="stream-badge">
+                    <span class="status-dot"></span>
+                    SSE STREAMING
+                </div>
+            </div>
+
+            <div id="chatMessages" class="chat-messages" aria-live="polite">
+                <div id="welcomeCard" class="welcome-card">
+                    <div class="welcome-symbol">✳</div>
+                    <h2>有什么可以帮你查找？</h2>
+                    <p>
+                        我会先检索知识库，再根据找到的资料组织答案。
+                        你可以直接提问，也可以试试下面的示例。
+                    </p>
+
+                    <div class="suggestion-list">
+                        <button class="suggestion-button"
+                                data-question="文档中的紧急验证码是什么？">
+                            文档中的紧急验证码是什么？
+                            <span>↗</span>
+                        </button>
+                        <button class="suggestion-button"
+                                data-question="总结一下知识库中关于 Go 和 goroutine 的内容。">
+                            总结 Go 和 goroutine 相关内容
+                            <span>↗</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <form id="chatForm" class="chat-composer">
+                <textarea
+                    id="questionInput"
+                    rows="2"
+                    maxlength="2000"
+                    placeholder="输入问题，例如：文档中的紧急验证码是什么？"
+                    aria-label="输入问题"
+                ></textarea>
+
+                <div class="composer-footer">
+                    <div class="composer-hint">
+                        Enter 发送 · Shift + Enter 换行
+                    </div>
+                    <div class="composer-actions">
+                        <button id="stopBtn" type="button"
+                                class="button button-secondary" hidden>
+                            停止生成
+                        </button>
+                        <button id="sendBtn" type="submit"
+                                class="button button-primary">
+                            发送问题 <span>↗</span>
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </section>
+
+        <!-- 功能二：独立语义检索 -->
+        <section id="searchView" class="workspace-view search-view" hidden>
+            <div class="panel-heading">
+                <div>
+                    <h2>语义检索</h2>
+                    <p>直接查看向量检索命中的文本块，不调用大模型生成答案。</p>
+                </div>
+            </div>
+
+            <form id="searchForm" class="search-form">
+                <input
+                    id="searchInput"
+                    type="text"
+                    maxlength="2000"
+                    placeholder="输入想查找的内容..."
+                    required
+                >
+
+                <select id="searchTopK" aria-label="检索数量">
+                    <option value="3">Top 3</option>
+                    <option value="5" selected>Top 5</option>
+                    <option value="10">Top 10</option>
+                    <option value="20">Top 20</option>
+                </select>
+
+                <button id="searchBtn" type="submit" class="button button-primary">
+                    开始检索
+                </button>
+            </form>
+
+            <div id="searchStatus" class="search-status">
+                输入关键词或问题，开始检索知识库。
+            </div>
+
+            <div id="searchResults" class="search-results"></div>
+        </section>
+
+        <footer class="main-footer">
+            GoRAG · Retrieval-Augmented Generation
+            <span>Powered by Go · Milvus · DeepSeek</span>
+        </footer>
+    </main>
+</div>
+</body>
+</html>

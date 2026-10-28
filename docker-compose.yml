@@ -1,0 +1,104 @@
+
+services:
+  # MySQL：保存文档信息和文本块
+  mysql:
+    image: mysql:8.0
+    container_name: gorag-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请检查.env中的MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME:?请检查.env中的DB_NAME}
+      MYSQL_USER: ${DB_USER:?请检查.env中的DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?请检查.env中的DB_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - gorag-net
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'mysqladmin ping -h 127.0.0.1 -uroot -p"$${MYSQL_ROOT_PASSWORD}" --silent'
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # Redis：缓存和请求限流
+  redis:
+    image: redis:7-alpine
+    container_name: gorag-redis
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?请检查.env中的REDIS_PASSWORD}
+    command:
+      - sh
+      - -c
+      - 'exec redis-server --appendonly yes --requirepass "$${REDIS_PASSWORD}"'
+    volumes:
+      - redis_data:/data
+    networks:
+      - gorag-net
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'redis-cli -a "$${REDIS_PASSWORD}" ping 2>/dev/null | grep -q PONG'
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # GoRAG：后端、前端和 SSE
+  gorag:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      network: host
+    image: gorag:local
+    container_name: gorag-app
+    restart: unless-stopped
+    environment:
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_USER: ${DB_USER:?请检查.env中的DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD:?请检查.env中的DB_PASSWORD}
+      DB_NAME: ${DB_NAME:?请检查.env中的DB_NAME}
+
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?请检查.env中的REDIS_PASSWORD}
+
+      # 连接已有的 Milvus 容器，不重复创建 Milvus
+      MILVUS_ADDRESS: milvus-standalone:19530
+
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:?请检查.env中的DASHSCOPE_API_KEY}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?请检查.env中的DEEPSEEK_API_KEY}
+
+    ports:
+      - "8080:8080"
+
+    volumes:
+      - uploads_data:/app/uploads
+
+    networks:
+      - gorag-net
+      - milvus
+
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+# 持久化卷：不要随意删除
+volumes:
+  mysql_data:
+  redis_data:
+  uploads_data:
+
+networks:
+  # GoRAG、MySQL、Redis 使用独立的内部网络
+  gorag-net:
+    driver: bridge
+
+  # 使用已有的 Milvus 网络
+  milvus:
+    external: true
+    name: milvus

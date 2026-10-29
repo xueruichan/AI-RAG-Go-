@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+
 	//Go 官方的 path/filepath 就是专门进行当前操作系统文件路径处理的包
 	"gorag/internal/service"
 	"gorag/internal/worker"
@@ -117,6 +118,9 @@ func (h *DocumentHandler) Create(c *gin.Context) {
 	//c.SaveUploadedFile 是 Gin 提供保存 FormFile 拿到的文件对象
 	//相当于封装了c++中的fopen、fread、fwrite、fclose这一系列系统调用
 	if err := c.SaveUploadedFile(file, storedPath); err != nil {
+		// 临时调试：打印文件保存失败的底层错误，方便定位原因。
+		fmt.Printf("[upload] SaveUploadedFile failed: filename=%q, path=%q, size=%d, err=%v\n",
+			file.Filename, storedPath, file.Size, err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "failed to save uploaded file",
 		})
